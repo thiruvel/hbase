@@ -1275,8 +1275,8 @@ public class AssignmentManager extends ZooKeeperListener {
     if (shouldAssignFavoredNodes(p)) {
       processFavoredNodesForDaughters(p, hri_a, hri_b);
       Map<HRegionInfo, List<ServerName>> fnMap = Maps.newHashMap();
-      fnMap.put(hri_a, server.getFavoredNodesManager().getFavoredNodes(hri_a));
-      fnMap.put(hri_b, server.getFavoredNodesManager().getFavoredNodes(hri_b));
+      fnMap.put(hri_a, server.getFavoredNodesManager().getFavoredNodesWithDNPort(hri_a));
+      fnMap.put(hri_b, server.getFavoredNodesManager().getFavoredNodesWithDNPort(hri_b));
       serverManager.sendFavoredNodes(sn, fnMap);
     }
   }
@@ -1286,7 +1286,7 @@ public class AssignmentManager extends ZooKeeperListener {
     if (shouldAssignFavoredNodes(p)) {
       processFavoredNodesForMerge(p, a, b);
       Map<HRegionInfo, List<ServerName>> fnMap = Maps.newHashMap();
-      fnMap.put(p, server.getFavoredNodesManager().getFavoredNodes(p));
+      fnMap.put(p, server.getFavoredNodesManager().getFavoredNodesWithDNPort(p));
       serverManager.sendFavoredNodes(sn, fnMap);
     }
   }
@@ -1816,7 +1816,7 @@ public class AssignmentManager extends ZooKeeperListener {
               region, State.PENDING_OPEN, destination);
             List<ServerName> favoredNodes = ServerName.EMPTY_SERVER_LIST;
             if (shouldAssignFavoredNodes(region)) {
-              favoredNodes = server.getFavoredNodesManager().getFavoredNodes(region);
+              favoredNodes = server.getFavoredNodesManager().getFavoredNodesWithDNPort(region);
             }
             regionOpenInfos.add(new Triple<HRegionInfo, Integer,  List<ServerName>>(
               region, nodeVersion, favoredNodes));
@@ -2261,7 +2261,7 @@ public class AssignmentManager extends ZooKeeperListener {
         try {
           List<ServerName> favoredNodes = ServerName.EMPTY_SERVER_LIST;
           if (shouldAssignFavoredNodes(region)) {
-            favoredNodes = server.getFavoredNodesManager().getFavoredNodes(region);
+            favoredNodes = server.getFavoredNodesManager().getFavoredNodesWithDNPort(region);
           }
           regionOpenState = serverManager.sendRegionOpen(
               plan.getDestination(), region, versionOfOfflineNode, favoredNodes);
@@ -3396,7 +3396,7 @@ public class AssignmentManager extends ZooKeeperListener {
                 List<ServerName> favoredNodes = ServerName.EMPTY_SERVER_LIST;
                 if (shouldAssignFavoredNodes(hri)) {
                   FavoredNodesManager fnm = ((MasterServices)server).getFavoredNodesManager();
-                  favoredNodes = fnm.getFavoredNodes(hri);
+                  favoredNodes = fnm.getFavoredNodesWithDNPort(hri);
                 }
                 RegionOpeningState regionOpenState = serverManager.sendRegionOpen(
                   serverName, hri, -1, favoredNodes);
