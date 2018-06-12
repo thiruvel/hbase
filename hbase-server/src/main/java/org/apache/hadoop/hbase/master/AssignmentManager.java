@@ -1248,38 +1248,47 @@ public class AssignmentManager extends ZooKeeperListener {
     }
   }
 
+  /*
+   * Favored nodes should be applied only when FavoredNodes balancer is configured and the region
+   * belongs to a non-system table.
+   */
+  private boolean shouldAssignFavoredNodes(HRegionInfo region) {
+    return this.shouldAssignRegionsWithFavoredNodes
+        && FavoredNodesManager.isFavoredNodeApplicable(region);
+  }
+
   void processFavoredNodesForDaughters(HRegionInfo parent,
     HRegionInfo regionA, HRegionInfo regionB) throws IOException {
-    if (shouldAssignRegionsWithFavoredNodes) {
-      List<ServerName> onlineServers = this.serverManager.getOnlineServersList();
-      ((FavoredNodesPromoter) this.balancer).
-          generateFavoredNodesForDaughter(onlineServers, parent, regionA, regionB);
-    }
+    List<ServerName> onlineServers = this.serverManager.getOnlineServersList();
+    ((FavoredNodesPromoter) this.balancer).
+        generateFavoredNodesForDaughter(onlineServers, parent, regionA, regionB);
   }
 
   void processFavoredNodesForMerge(HRegionInfo merged, HRegionInfo regionA, HRegionInfo regionB)
     throws IOException {
-    if (shouldAssignRegionsWithFavoredNodes) {
-      ((FavoredNodesPromoter)this.balancer).
+    ((FavoredNodesPromoter)this.balancer).
         generateFavoredNodesForMergedRegion(merged, regionA, regionB);
-    }
   }
 
   private void processFNForDaughtersAndUpdateRS(ServerName sn, HRegionInfo hri_a, HRegionInfo hri_b,
       HRegionInfo p) throws IOException {
-    processFavoredNodesForDaughters(p, hri_a, hri_b);
-    Map<HRegionInfo, List<ServerName>> fnMap = Maps.newHashMap();
-    fnMap.put(hri_a, server.getFavoredNodesManager().getFavoredNodes(hri_a));
-    fnMap.put(hri_b, server.getFavoredNodesManager().getFavoredNodes(hri_b));
-    serverManager.sendFavoredNodes(sn, fnMap);
+    if (shouldAssignFavoredNodes(p)) {
+      processFavoredNodesForDaughters(p, hri_a, hri_b);
+      Map<HRegionInfo, List<ServerName>> fnMap = Maps.newHashMap();
+      fnMap.put(hri_a, server.getFavoredNodesManager().getFavoredNodes(hri_a));
+      fnMap.put(hri_b, server.getFavoredNodesManager().getFavoredNodes(hri_b));
+      serverManager.sendFavoredNodes(sn, fnMap);
+    }
   }
 
   private void processFNForMergeAndUpdateRS(ServerName sn, HRegionInfo p, HRegionInfo a,
       HRegionInfo b) throws IOException {
-    processFavoredNodesForMerge(p, a, b);
-    Map<HRegionInfo, List<ServerName>> fnMap = Maps.newHashMap();
-    fnMap.put(p, server.getFavoredNodesManager().getFavoredNodes(p));
-    serverManager.sendFavoredNodes(sn, fnMap);
+    if (shouldAssignFavoredNodes(p)) {
+      processFavoredNodesForMerge(p, a, b);
+      Map<HRegionInfo, List<ServerName>> fnMap = Maps.newHashMap();
+      fnMap.put(p, server.getFavoredNodesManager().getFavoredNodes(p));
+      serverManager.sendFavoredNodes(sn, fnMap);
+    }
   }
 
   /**
@@ -1806,7 +1815,7 @@ public class AssignmentManager extends ZooKeeperListener {
             regionStates.updateRegionState(
               region, State.PENDING_OPEN, destination);
             List<ServerName> favoredNodes = ServerName.EMPTY_SERVER_LIST;
-            if (this.shouldAssignRegionsWithFavoredNodes) {
+            if (shouldAssignFavoredNodes(region)) {
               favoredNodes = server.getFavoredNodesManager().getFavoredNodes(region);
             }
             regionOpenInfos.add(new Triple<HRegionInfo, Integer,  List<ServerName>>(
@@ -2251,7 +2260,7 @@ public class AssignmentManager extends ZooKeeperListener {
             " to " + plan.getDestination();
         try {
           List<ServerName> favoredNodes = ServerName.EMPTY_SERVER_LIST;
-          if (this.shouldAssignRegionsWithFavoredNodes) {
+          if (shouldAssignFavoredNodes(region)) {
             favoredNodes = server.getFavoredNodesManager().getFavoredNodes(region);
           }
           regionOpenState = serverManager.sendRegionOpen(
@@ -3385,7 +3394,7 @@ public class AssignmentManager extends ZooKeeperListener {
                   return; // Region is not in the expected state any more
                 }
                 List<ServerName> favoredNodes = ServerName.EMPTY_SERVER_LIST;
-                if (shouldAssignRegionsWithFavoredNodes) {
+                if (shouldAssignFavoredNodes(hri)) {
                   FavoredNodesManager fnm = ((MasterServices)server).getFavoredNodesManager();
                   favoredNodes = fnm.getFavoredNodes(hri);
                 }

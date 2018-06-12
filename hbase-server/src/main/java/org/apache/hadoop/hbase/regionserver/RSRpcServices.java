@@ -1833,8 +1833,10 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
             regionServer.service.submit(new OpenMetaHandler(
               regionServer, regionServer, region, htd, masterSystemTime, coordination, ord));
           } else {
-            regionServer.updateRegionFavoredNodesMapping(region.getEncodedName(),
-              regionOpenInfo.getFavoredNodesList());
+            if (regionOpenInfo.getFavoredNodesCount() > 0) {
+              regionServer.updateRegionFavoredNodesMapping(region.getEncodedName(),
+                  regionOpenInfo.getFavoredNodesList());
+            }
             if (htd.getPriority() >= HConstants.ADMIN_QOS || region.getTable().isSystemTable()) {
               regionServer.service.submit(new OpenPriorityRegionHandler(
                 regionServer, regionServer, region, htd, masterSystemTime, coordination, ord));
@@ -2135,8 +2137,10 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
     UpdateFavoredNodesResponse.Builder respBuilder = UpdateFavoredNodesResponse.newBuilder();
     for (UpdateFavoredNodesRequest.RegionUpdateInfo regionUpdateInfo : openInfoList) {
       HRegionInfo hri = HRegionInfo.convert(regionUpdateInfo.getRegion());
-      regionServer.updateRegionFavoredNodesMapping(hri.getEncodedName(),
-        regionUpdateInfo.getFavoredNodesList());
+      if (regionUpdateInfo.getFavoredNodesCount() > 0) {
+        regionServer.updateRegionFavoredNodesMapping(hri.getEncodedName(),
+          regionUpdateInfo.getFavoredNodesList());
+      }
     }
     respBuilder.setResponse(openInfoList.size());
     return respBuilder.build();

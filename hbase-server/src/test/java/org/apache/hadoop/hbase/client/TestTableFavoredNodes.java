@@ -23,6 +23,7 @@ import static org.apache.hadoop.hbase.favored.FavoredNodesPlan.Position.TERTIARY
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
@@ -33,6 +34,7 @@ import java.util.Map;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hbase.NamespaceDescriptor;
 import org.apache.hadoop.hbase.favored.FavoredNodeAssignmentHelper;
 import org.apache.hadoop.hbase.favored.FavoredNodeLoadBalancer;
 import org.apache.hadoop.hbase.favored.FavoredNodesManager;
@@ -84,6 +86,7 @@ public class TestTableFavoredNodes {
         FavoredNodeLoadBalancer.class, LoadBalancer.class);
     conf.set(ServerManager.WAIT_ON_REGIONSERVERS_MINTOSTART, "" + SLAVES);
     conf.setBooleanIfUnset("hbase.assignment.usezk", false);
+    LOG.debug("ZK assignment status: " + conf.getBoolean("hbase.assignment.usezk", false));
     TEST_UTIL.startMiniCluster(SLAVES);
     TEST_UTIL.getMiniHBaseCluster().waitForActiveAndReadyMaster(WAIT_TIMEOUT);
   }
@@ -266,6 +269,30 @@ public class TestTableFavoredNodes {
       assertEquals("Inconsistent FN bet RS and Master, RS diff: " + fnFromRS
         + " List on master: "  + fnList, 0, fnFromRS.size());
     }
+  }
+
+  /*
+   * Check favored nodes for system tables
+   */
+  @Test
+  public void testSystemTables() throws Exception {
+
+    TableName tableName = TableName.valueOf("createTable");
+    TEST_UTIL.createTable(tableName, Bytes.toBytes("f"), splitKeys);
+    TEST_UTIL.waitUntilAllRegionsAssigned(tableName);
+
+    // All regions should have favored nodes
+    checkIfFavoredNodeInformationIsCorrect(tableName);
+
+    for (TableName sysTable :
+        admin.listTableNamesByNamespace(NamespaceDescriptor.SYSTEM_NAMESPACE_NAME_STR)) {
+      List<HRegionInfo> regions = admin.getTableRegions(sysTable);
+      for (HRegionInfo region : regions) {
+        assertNull("FN should be null for sys region", fnm.getFavoredNodes(region));
+      }
+    }
+
+    TEST_UTIL.deleteTable(tableName);
   }
 
   private void checkIfDaughterInherits2FN(List<ServerName> parentFN, List<ServerName> daughterFN) {
