@@ -45,6 +45,7 @@ import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.client.MetaScanner;
 import org.apache.hadoop.hbase.client.MetaScanner.MetaScannerVisitor;
 import org.apache.hadoop.hbase.client.Result;
+import org.apache.hadoop.hbase.favored.FavoredNodesManager;
 import org.apache.hadoop.hbase.regionserver.HRegionFileSystem;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.FSUtils;
@@ -52,6 +53,8 @@ import org.apache.hadoop.hbase.util.Pair;
 import org.apache.hadoop.hbase.util.PairOfSameType;
 import org.apache.hadoop.hbase.util.Threads;
 import org.apache.hadoop.hbase.util.Triple;
+
+import com.google.common.collect.Lists;
 
 /**
  * A janitor for the catalog tables.  Scans the <code>hbase:meta</code> catalog
@@ -224,6 +227,10 @@ public class CatalogJanitor extends ScheduledChore {
       services.getAssignmentManager().getRegionStates().deleteRegion(regionB);
       services.getServerManager().removeRegion(regionA);
       services.getServerManager().removeRegion(regionB);
+      FavoredNodesManager fnm = this.services.getFavoredNodesManager();
+      if (fnm != null) {
+        fnm.deleteFavoredNodesForRegions(Lists.newArrayList(regionA, regionB));
+      }
       return true;
     }
     return false;
@@ -369,6 +376,10 @@ public class CatalogJanitor extends ScheduledChore {
       if (services.getAssignmentManager().getRegionStates() != null)
         services.getAssignmentManager().getRegionStates().deleteRegion(parent);
       services.getServerManager().removeRegion(parent);
+      FavoredNodesManager fnm = this.services.getFavoredNodesManager();
+      if (fnm != null) {
+        fnm.deleteFavoredNodesForRegions(Lists.newArrayList(parent));
+      }
       result = true;
     }
     return result;
