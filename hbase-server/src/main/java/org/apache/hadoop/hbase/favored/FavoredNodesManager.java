@@ -18,9 +18,11 @@
  */
 package org.apache.hadoop.hbase.favored;
 
+import static org.apache.hadoop.hbase.favored.FavoredNodeAssignmentHelper.FAVORED_NODES_NUM;
 import static org.apache.hadoop.hbase.favored.FavoredNodesPlan.Position.PRIMARY;
 import static org.apache.hadoop.hbase.favored.FavoredNodesPlan.Position.SECONDARY;
 import static org.apache.hadoop.hbase.favored.FavoredNodesPlan.Position.TERTIARY;
+import static org.apache.hadoop.hbase.ServerName.NON_STARTCODE;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -28,7 +30,9 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
+import com.google.common.collect.Maps;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.classification.InterfaceAudience;
@@ -37,6 +41,7 @@ import org.apache.hadoop.hbase.HBaseIOException;
 import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.master.MasterServices;
+import org.apache.hadoop.hbase.master.RackManager;
 import org.apache.hadoop.hbase.master.SnapshotOfRegionAssignmentFromMeta;
 import org.apache.hadoop.hdfs.DFSConfigKeys;
 import org.apache.hadoop.hdfs.HdfsConfiguration;
@@ -66,6 +71,7 @@ public class FavoredNodesManager {
   private Map<ServerName, List<HRegionInfo>> teritiaryRSToRegionMap;
 
   private MasterServices masterServices;
+  private RackManager rackManager;
 
   /**
    * Datanode port to be used for Favored Nodes.
@@ -78,6 +84,7 @@ public class FavoredNodesManager {
     this.primaryRSToRegionMap = new HashMap<>();
     this.secondaryRSToRegionMap = new HashMap<>();
     this.teritiaryRSToRegionMap = new HashMap<>();
+    this.rackManager = new RackManager(masterServices.getConfiguration());
   }
 
   public void initialize(SnapshotOfRegionAssignmentFromMeta snapshotOfRegionAssignment)
@@ -113,6 +120,22 @@ public class FavoredNodesManager {
     return !regionInfo.isSystemTable();
   }
 
+  /**
+   * Filter and return regions for which favored nodes is not applicable.
+   *
+   * @param regions - collection of regions
+   * @return set of regions for which favored nodes is not applicable
+   */
+  public static Set<HRegionInfo> filterNonFNApplicableRegions(Collection<HRegionInfo> regions) {
+    Set<HRegionInfo> fnRegions = Sets.newHashSet();
+    for (HRegionInfo regionInfo : regions) {
+      if (!isFavoredNodeApplicable(regionInfo)) {
+        fnRegions.add(regionInfo);
+      }
+    }
+    return fnRegions;
+  }
+
   /*
    * This should only be used when sending FN information to the region servers. Instead of
    * sending the region server port, we use the datanode port. This helps in centralizing the DN
@@ -126,7 +149,7 @@ public class FavoredNodesManager {
     List<ServerName> fnWithDNPort = Lists.newArrayList();
     for (ServerName sn : getFavoredNodes(regionInfo)) {
       fnWithDNPort.add(ServerName.valueOf(sn.getHostname(), datanodeDataTransferPort,
-        ServerName.NON_STARTCODE));
+        NON_STARTCODE));
     }
     return fnWithDNPort;
   }
@@ -152,19 +175,19 @@ public class FavoredNodesManager {
             + regionInfo.getRegionNameAsString() + " with " + servers);
       }
 
-      if (servers.size() != FavoredNodeAssignmentHelper.FAVORED_NODES_NUM) {
-        throw new IOException("At least " + FavoredNodeAssignmentHelper.FAVORED_NODES_NUM
+      if (servers.size() != FAVORED_NODES_NUM) {
+        throw new IOException("At least " + FAVORED_NODES_NUM
             + " favored nodes should be present for region : " + regionInfo.getEncodedName()
             + " current FN servers:" + servers);
       }
 
       List<ServerName> serversWithNoStartCodes = Lists.newArrayList();
       for (ServerName sn : servers) {
-        if (sn.getStartcode() == ServerName.NON_STARTCODE) {
+        if (sn.getStartcode() == NON_STARTCODE) {
           serversWithNoStartCodes.add(sn);
         } else {
           serversWithNoStartCodes.add(ServerName.valueOf(sn.getHostname(), sn.getPort(),
-              ServerName.NON_STARTCODE));
+              NON_STARTCODE));
         }
       }
       regionToFavoredNodes.put(regionInfo, serversWithNoStartCodes);
@@ -186,7 +209,7 @@ public class FavoredNodesManager {
 
   private synchronized void addToReplicaLoad(HRegionInfo hri, List<ServerName> servers) {
     ServerName serverToUse = ServerName.valueOf(servers.get(PRIMARY.ordinal()).getHostAndPort(),
-        ServerName.NON_STARTCODE);
+        NON_STARTCODE);
     List<HRegionInfo> regionList = primaryRSToRegionMap.get(serverToUse);
     if (regionList == null) {
       regionList = new ArrayList<>();
@@ -195,7 +218,7 @@ public class FavoredNodesManager {
     primaryRSToRegionMap.put(serverToUse, regionList);
 
     serverToUse = ServerName
-        .valueOf(servers.get(SECONDARY.ordinal()).getHostAndPort(), ServerName.NON_STARTCODE);
+        .valueOf(servers.get(SECONDARY.ordinal()).getHostAndPort(), NON_STARTCODE);
     regionList = secondaryRSToRegionMap.get(serverToUse);
     if (regionList == null) {
       regionList = new ArrayList<>();
@@ -204,13 +227,46 @@ public class FavoredNodesManager {
     secondaryRSToRegionMap.put(serverToUse, regionList);
 
     serverToUse = ServerName.valueOf(servers.get(TERTIARY.ordinal()).getHostAndPort(),
-      ServerName.NON_STARTCODE);
+      NON_STARTCODE);
     regionList = teritiaryRSToRegionMap.get(serverToUse);
     if (regionList == null) {
       regionList = new ArrayList<>();
     }
     regionList.add(hri);
     teritiaryRSToRegionMap.put(serverToUse, regionList);
+  }
+
+  /*
+   * Get the replica count for the servers provided.
+   *
+   * For each server, replica count includes three counts for primary, secondary and tertiary.
+   * If a server is the primary favored node for 10 regions, secondary for 5 and tertiary
+   * for 1, then the list would be [10, 5, 1]. If the server is newly added to the cluster is
+   * not a favored node for any region, the replica count would be [0, 0, 0].
+   */
+  public synchronized Map<ServerName, List<Integer>> getReplicaLoad(List<ServerName> servers) {
+    Map<ServerName, List<Integer>> result = Maps.newHashMap();
+    for (ServerName sn : servers) {
+      ServerName serverNoStartCode = ServerName.valueOf(sn.getAddress().toString(), NON_STARTCODE);
+      List<Integer> countList = Lists.newArrayList();
+      if (primaryRSToRegionMap.containsKey(serverNoStartCode)) {
+        countList.add(primaryRSToRegionMap.get(serverNoStartCode).size());
+      } else {
+        countList.add(0);
+      }
+      if (secondaryRSToRegionMap.containsKey(serverNoStartCode)) {
+        countList.add(secondaryRSToRegionMap.get(serverNoStartCode).size());
+      } else {
+        countList.add(0);
+      }
+      if (teritiaryRSToRegionMap.containsKey(serverNoStartCode)) {
+        countList.add(teritiaryRSToRegionMap.get(serverNoStartCode).size());
+      } else {
+        countList.add(0);
+      }
+      result.put(sn, countList);
+    }
+    return result;
   }
 
   public synchronized void deleteFavoredNodesForRegions(Collection<HRegionInfo> regionInfoList) {
@@ -229,5 +285,9 @@ public class FavoredNodesManager {
         globalFavoredNodesAssignmentPlan.removeFavoredNodes(hri);
       }
     }
+  }
+
+  public RackManager getRackManager() {
+    return rackManager;
   }
 }

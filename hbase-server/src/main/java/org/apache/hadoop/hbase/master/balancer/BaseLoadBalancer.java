@@ -1344,7 +1344,7 @@ public abstract class BaseLoadBalancer implements LoadBalancer {
    */
   @Override
   public Map<ServerName, List<HRegionInfo>> roundRobinAssignment(List<HRegionInfo> regions,
-      List<ServerName> servers) {
+      List<ServerName> servers) throws HBaseIOException {
     metricsBalancer.incrMiscInvocations();
     Map<ServerName, List<HRegionInfo>> assignments = assignMasterRegions(regions, servers);
     if (assignments != null && !assignments.isEmpty()) {
@@ -1461,7 +1461,7 @@ public abstract class BaseLoadBalancer implements LoadBalancer {
    */
   @Override
   public Map<HRegionInfo, ServerName> immediateAssignment(List<HRegionInfo> regions,
-      List<ServerName> servers) {
+      List<ServerName> servers) throws HBaseIOException {
     metricsBalancer.incrMiscInvocations();
     if (servers == null || servers.isEmpty()) {
       LOG.warn("Wanted to do random assignment but no servers to assign to");
@@ -1479,7 +1479,8 @@ public abstract class BaseLoadBalancer implements LoadBalancer {
    * Used to assign a single region to a random server.
    */
   @Override
-  public ServerName randomAssignment(HRegionInfo regionInfo, List<ServerName> servers) {
+  public ServerName randomAssignment(HRegionInfo regionInfo, List<ServerName> servers)
+      throws HBaseIOException {
     metricsBalancer.incrMiscInvocations();
     if (servers != null && servers.contains(masterServerName)) {
       if (shouldBeOnMaster(regionInfo)) {
@@ -1523,7 +1524,7 @@ public abstract class BaseLoadBalancer implements LoadBalancer {
    */
   @Override
   public Map<ServerName, List<HRegionInfo>> retainAssignment(Map<HRegionInfo, ServerName> regions,
-      List<ServerName> servers) {
+      List<ServerName> servers) throws HBaseIOException {
     // Update metrics
     metricsBalancer.incrMiscInvocations();
     Map<ServerName, List<HRegionInfo>> assignments

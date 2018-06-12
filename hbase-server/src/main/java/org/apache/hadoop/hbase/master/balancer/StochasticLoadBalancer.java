@@ -56,6 +56,8 @@ import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 
 import com.google.common.base.Optional;
 
+import com.google.common.collect.Lists;
+
 /**
  * <p>This is a best effort load balancer. Given a Cost function F(C) =&gt; x It will
  * randomly try and mutate the cluster to Cprime. If F(Cprime) &lt; F(C) then the
@@ -108,6 +110,8 @@ public class StochasticLoadBalancer extends BaseLoadBalancer {
       "hbase.master.balancer.stochastic.stepsPerRegion";
   protected static final String MAX_STEPS_KEY =
       "hbase.master.balancer.stochastic.maxSteps";
+  protected static final String RUN_MAXIMUM_STEPS =
+      "hbase.master.balancer.stochastic.execute.maxSteps";
   protected static final String MAX_RUNNING_TIME_KEY =
       "hbase.master.balancer.stochastic.maxRunningTime";
   protected static final String KEEP_REGION_LOADS =
@@ -116,19 +120,20 @@ public class StochasticLoadBalancer extends BaseLoadBalancer {
   protected static final String MIN_COST_NEED_BALANCE_KEY =
       "hbase.master.balancer.stochastic.minCostNeedBalance";
 
-  private static final Random RANDOM = new Random(System.currentTimeMillis());
+  protected static final Random RANDOM = new Random(System.currentTimeMillis());
   private static final Log LOG = LogFactory.getLog(StochasticLoadBalancer.class);
 
   Map<String, Deque<RegionLoad>> loads = new HashMap<String, Deque<RegionLoad>>();
 
   // values are defaults
   private int maxSteps = 1000000;
+  private boolean executeMaximumSteps = false;
   private int stepsPerRegion = 800;
   private long maxRunningTime = 30 * 1000 * 1; // 30 seconds.
   private int numRegionLoadsToRemember = 15;
   private float minCostNeedBalance = 0.05f;
 
-  private CandidateGenerator[] candidateGenerators;
+  private List<CandidateGenerator> candidateGenerators;
   private CostFromRegionLoadFunction[] regionLoadFunctions;
   private CostFunction[] costFunctions; // FindBugs: Wants this protected; IS2_INCONSISTENT_SYNC
 
@@ -169,6 +174,7 @@ public class StochasticLoadBalancer extends BaseLoadBalancer {
 
     stepsPerRegion = conf.getInt(STEPS_PER_REGION_KEY, stepsPerRegion);
     maxRunningTime = conf.getLong(MAX_RUNNING_TIME_KEY, maxRunningTime);
+    executeMaximumSteps = conf.getBoolean(RUN_MAXIMUM_STEPS, executeMaximumSteps);
 
     numRegionLoadsToRemember = conf.getInt(KEEP_REGION_LOADS, numRegionLoadsToRemember);
     isByTable = conf.getBoolean(HConstants.HBASE_MASTER_LOADBALANCE_BYTABLE, isByTable);
@@ -181,13 +187,12 @@ public class StochasticLoadBalancer extends BaseLoadBalancer {
     localityCost = new ServerLocalityCostFunction(conf, services);
     rackLocalityCost = new RackLocalityCostFunction(conf, services);
 
-    if (candidateGenerators == null) {
-      candidateGenerators = new CandidateGenerator[] {
-          new RandomCandidateGenerator(),
-          new LoadCandidateGenerator(),
-          localityCandidateGenerator,
-          new RegionReplicaRackCandidateGenerator(),
-      };
+    if (this.candidateGenerators == null) {
+      candidateGenerators = Lists.newArrayList();
+      candidateGenerators.add(new RandomCandidateGenerator());
+      candidateGenerators.add(new LoadCandidateGenerator());
+      candidateGenerators.add(localityCandidateGenerator);
+      candidateGenerators.add(new RegionReplicaRackCandidateGenerator());
     }
 
     regionLoadFunctions = new CostFromRegionLoadFunction[] {
@@ -262,6 +267,10 @@ public class StochasticLoadBalancer extends BaseLoadBalancer {
     this.localityCandidateGenerator.setServices(masterServices);
   }
 
+  protected void setCandidateGenerators(List<CandidateGenerator> customCandidateGenerators) {
+    this.candidateGenerators = customCandidateGenerators;
+  }
+
   @Override
   protected synchronized boolean areSomeRegionReplicasColocated(Cluster c) {
     regionReplicaHostCostFunction.init(c);
@@ -319,8 +328,7 @@ public class StochasticLoadBalancer extends BaseLoadBalancer {
 
   @VisibleForTesting
   Cluster.Action nextAction(Cluster cluster) {
-    return candidateGenerators[(RANDOM.nextInt(candidateGenerators.length))]
-            .generate(cluster);
+    return candidateGenerators.get(RANDOM.nextInt(candidateGenerators.size())).generate(cluster);
   }
 
   /**
@@ -377,8 +385,15 @@ public class StochasticLoadBalancer extends BaseLoadBalancer {
     double initCost = currentCost;
     double newCost = currentCost;
 
-    long computedMaxSteps = Math.min(this.maxSteps,
-        ((long)cluster.numRegions * (long)this.stepsPerRegion * (long)cluster.numServers));
+    long computedMaxSteps;
+    if (executeMaximumSteps) {
+      computedMaxSteps = Math.max(this.maxSteps,
+          ((long)cluster.numRegions * (long)this.stepsPerRegion * (long)cluster.numServers));
+    } else {
+      computedMaxSteps = Math.min(this.maxSteps,
+          ((long)cluster.numRegions * (long)this.stepsPerRegion * (long)cluster.numServers));
+    }
+
     // Perform a stochastic walk to see if we can get a good fit.
     long step;
 

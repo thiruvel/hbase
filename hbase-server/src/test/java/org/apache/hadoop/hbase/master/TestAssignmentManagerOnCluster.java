@@ -41,6 +41,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.CoordinatedStateManager;
+import org.apache.hadoop.hbase.HBaseIOException;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HColumnDescriptor;
 import org.apache.hadoop.hbase.HConstants;
@@ -1374,7 +1375,7 @@ public class TestAssignmentManagerOnCluster {
 
     @Override
     public ServerName randomAssignment(HRegionInfo regionInfo,
-        List<ServerName> servers) {
+        List<ServerName> servers) throws HBaseIOException {
       if (regionInfo.equals(controledRegion)) {
         return null;
       }
@@ -1383,7 +1384,7 @@ public class TestAssignmentManagerOnCluster {
 
     @Override
     public Map<ServerName, List<HRegionInfo>> roundRobinAssignment(
-        List<HRegionInfo> regions, List<ServerName> servers) {
+        List<HRegionInfo> regions, List<ServerName> servers) throws HBaseIOException {
       if (countRegionServers != null && services != null) {
         int regionServers = services.getServerManager().countOfRegionServers();
         if (regionServers < countRegionServers.intValue()) {
@@ -1403,7 +1404,7 @@ public class TestAssignmentManagerOnCluster {
 
     @Override
     public Map<ServerName, List<HRegionInfo>> retainAssignment(
-        Map<HRegionInfo, ServerName> regions, List<ServerName> servers) {
+        Map<HRegionInfo, ServerName> regions, List<ServerName> servers) throws HBaseIOException {
       for (HRegionInfo hri : regions.keySet()) {
         if (hri.equals(controledRegion)) {
           Map<ServerName, List<HRegionInfo>> m = Maps.newHashMap();
