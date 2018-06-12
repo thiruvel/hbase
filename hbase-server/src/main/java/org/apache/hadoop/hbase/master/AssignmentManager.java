@@ -79,12 +79,12 @@ import org.apache.hadoop.hbase.exceptions.DeserializationException;
 import org.apache.hadoop.hbase.executor.EventHandler;
 import org.apache.hadoop.hbase.executor.EventType;
 import org.apache.hadoop.hbase.executor.ExecutorService;
+import org.apache.hadoop.hbase.favored.FavoredNodesManager;
+import org.apache.hadoop.hbase.favored.FavoredNodesPromoter;
 import org.apache.hadoop.hbase.ipc.FailedServerException;
 import org.apache.hadoop.hbase.ipc.RpcClient;
 import org.apache.hadoop.hbase.ipc.ServerNotRunningYetException;
 import org.apache.hadoop.hbase.master.RegionState.State;
-import org.apache.hadoop.hbase.master.balancer.FavoredNodeAssignmentHelper;
-import org.apache.hadoop.hbase.master.balancer.FavoredNodeLoadBalancer;
 import org.apache.hadoop.hbase.master.handler.ClosedRegionHandler;
 import org.apache.hadoop.hbase.master.handler.DisableTableHandler;
 import org.apache.hadoop.hbase.master.handler.EnableTableHandler;
@@ -121,6 +121,7 @@ import org.apache.zookeeper.data.Stat;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.LinkedHashMultimap;
+import com.google.common.collect.Maps;
 
 /**
  * Manages and performs region assignment.
@@ -299,10 +300,6 @@ public class AssignmentManager extends ZooKeeperListener {
     this.regionsToReopen = Collections.synchronizedMap
                            (new HashMap<String, HRegionInfo> ());
     Configuration conf = server.getConfiguration();
-    // Only read favored nodes if using the favored nodes load balancer.
-    this.shouldAssignRegionsWithFavoredNodes = conf.getClass(
-           HConstants.HBASE_MASTER_LOADBALANCER_CLASS, Object.class).equals(
-           FavoredNodeLoadBalancer.class);
     try {
       if (server.getCoordinatedStateManager() != null) {
         this.tableStateManager = server.getCoordinatedStateManager().getTableStateManager();
@@ -318,6 +315,8 @@ public class AssignmentManager extends ZooKeeperListener {
     this.sleepTimeBeforeRetryingMetaAssignment = this.server.getConfiguration().getLong(
         "hbase.meta.assignment.retry.sleeptime", 1000l);
     this.balancer = balancer;
+    // Only read favored nodes if using the favored nodes load balancer.
+    this.shouldAssignRegionsWithFavoredNodes = this.balancer instanceof FavoredNodesPromoter;
     int maxThreads = conf.getInt("hbase.assignment.threads.max", 30);
 
     this.threadPoolExecutorService = Threads.getBoundedCachedThreadPool(
@@ -1249,23 +1248,38 @@ public class AssignmentManager extends ZooKeeperListener {
     }
   }
 
-  // TODO: processFavoredNodes might throw an exception, for e.g., if the
-  // meta could not be contacted/updated. We need to see how seriously to treat
-  // this problem as. Should we fail the current assignment. We should be able
-  // to recover from this problem eventually (if the meta couldn't be updated
-  // things should work normally and eventually get fixed up).
-  void processFavoredNodes(List<HRegionInfo> regions) throws IOException {
-    if (!shouldAssignRegionsWithFavoredNodes) return;
-    // The AM gets the favored nodes info for each region and updates the meta
-    // table with that info
-    Map<HRegionInfo, List<ServerName>> regionToFavoredNodes =
-        new HashMap<HRegionInfo, List<ServerName>>();
-    for (HRegionInfo region : regions) {
-      regionToFavoredNodes.put(region,
-          ((FavoredNodeLoadBalancer)this.balancer).getFavoredNodes(region));
+  void processFavoredNodesForDaughters(HRegionInfo parent,
+    HRegionInfo regionA, HRegionInfo regionB) throws IOException {
+    if (shouldAssignRegionsWithFavoredNodes) {
+      List<ServerName> onlineServers = this.serverManager.getOnlineServersList();
+      ((FavoredNodesPromoter) this.balancer).
+          generateFavoredNodesForDaughter(onlineServers, parent, regionA, regionB);
     }
-    FavoredNodeAssignmentHelper.updateMetaWithFavoredNodesInfo(regionToFavoredNodes,
-      this.server.getConnection());
+  }
+
+  void processFavoredNodesForMerge(HRegionInfo merged, HRegionInfo regionA, HRegionInfo regionB)
+    throws IOException {
+    if (shouldAssignRegionsWithFavoredNodes) {
+      ((FavoredNodesPromoter)this.balancer).
+        generateFavoredNodesForMergedRegion(merged, regionA, regionB);
+    }
+  }
+
+  private void processFNForDaughtersAndUpdateRS(ServerName sn, HRegionInfo hri_a, HRegionInfo hri_b,
+      HRegionInfo p) throws IOException {
+    processFavoredNodesForDaughters(p, hri_a, hri_b);
+    Map<HRegionInfo, List<ServerName>> fnMap = Maps.newHashMap();
+    fnMap.put(hri_a, server.getFavoredNodesManager().getFavoredNodes(hri_a));
+    fnMap.put(hri_b, server.getFavoredNodesManager().getFavoredNodes(hri_b));
+    serverManager.sendFavoredNodes(sn, fnMap);
+  }
+
+  private void processFNForMergeAndUpdateRS(ServerName sn, HRegionInfo p, HRegionInfo a,
+      HRegionInfo b) throws IOException {
+    processFavoredNodesForMerge(p, a, b);
+    Map<HRegionInfo, List<ServerName>> fnMap = Maps.newHashMap();
+    fnMap.put(p, server.getFavoredNodesManager().getFavoredNodes(p));
+    serverManager.sendFavoredNodes(sn, fnMap);
   }
 
   /**
@@ -1793,7 +1807,7 @@ public class AssignmentManager extends ZooKeeperListener {
               region, State.PENDING_OPEN, destination);
             List<ServerName> favoredNodes = ServerName.EMPTY_SERVER_LIST;
             if (this.shouldAssignRegionsWithFavoredNodes) {
-              favoredNodes = ((FavoredNodeLoadBalancer)this.balancer).getFavoredNodes(region);
+              favoredNodes = server.getFavoredNodesManager().getFavoredNodes(region);
             }
             regionOpenInfos.add(new Triple<HRegionInfo, Integer,  List<ServerName>>(
               region, nodeVersion, favoredNodes));
@@ -2238,7 +2252,7 @@ public class AssignmentManager extends ZooKeeperListener {
         try {
           List<ServerName> favoredNodes = ServerName.EMPTY_SERVER_LIST;
           if (this.shouldAssignRegionsWithFavoredNodes) {
-            favoredNodes = ((FavoredNodeLoadBalancer)this.balancer).getFavoredNodes(region);
+            favoredNodes = server.getFavoredNodesManager().getFavoredNodes(region);
           }
           regionOpenState = serverManager.sendRegionOpen(
               plan.getDestination(), region, versionOfOfflineNode, favoredNodes);
@@ -2580,15 +2594,6 @@ public class AssignmentManager extends ZooKeeperListener {
       }
       synchronized (this.regionPlans) {
         randomPlan = new RegionPlan(region, null, destination);
-        if (!region.isMetaTable() && shouldAssignRegionsWithFavoredNodes) {
-          List<HRegionInfo> regions = new ArrayList<HRegionInfo>(1);
-          regions.add(region);
-          try {
-            processFavoredNodes(regions);
-          } catch (IOException ie) {
-            LOG.warn("Ignoring exception in processFavoredNodes " + ie);
-          }
-        }
         this.regionPlans.put(encodedName, randomPlan);
       }
       LOG.debug("No previous transition plan found (or ignoring " + "an existing plan) for "
@@ -2989,7 +2994,6 @@ public class AssignmentManager extends ZooKeeperListener {
 
     processBogusAssignments(bulkPlan);
 
-    processFavoredNodes(regions);
     assign(regions.size(), servers.size(), "round-robin=true", bulkPlan);
   }
 
@@ -3382,7 +3386,8 @@ public class AssignmentManager extends ZooKeeperListener {
                 }
                 List<ServerName> favoredNodes = ServerName.EMPTY_SERVER_LIST;
                 if (shouldAssignRegionsWithFavoredNodes) {
-                  favoredNodes = ((FavoredNodeLoadBalancer)balancer).getFavoredNodes(hri);
+                  FavoredNodesManager fnm = ((MasterServices)server).getFavoredNodesManager();
+                  favoredNodes = fnm.getFavoredNodes(hri);
                 }
                 RegionOpeningState regionOpenState = serverManager.sendRegionOpen(
                   serverName, hri, -1, favoredNodes);
@@ -4029,6 +4034,7 @@ public class AssignmentManager extends ZooKeeperListener {
     } else if (code == TransitionCode.SPLIT_PONR) {
       try {
         regionStates.splitRegion(p, a, b, sn);
+        processFNForDaughtersAndUpdateRS(sn, a, b, p);
       } catch (IOException ioe) {
         LOG.info("Failed to record split region " + p.getShortNameToLog());
         return "Failed to record the splitting in meta";
@@ -4086,6 +4092,13 @@ public class AssignmentManager extends ZooKeeperListener {
         LOG.info("Failed to record merged region " + p.getShortNameToLog());
         return "Failed to record the merging in meta";
       }
+      try {
+        processFNForMergeAndUpdateRS(sn, p, a, b);
+      } catch (IOException e) {
+        LOG.error("Error while processing favored nodes after merge.", e);
+        return StringUtils.stringifyException(e);
+      }
+
     }
     return null;
   }
@@ -4226,6 +4239,13 @@ public class AssignmentManager extends ZooKeeperListener {
         + ", region_a=" + hri_a.getRegionNameAsString() + ", region_b="
         + hri_b.getRegionNameAsString() + ", on " + sn);
 
+      try {
+        processFNForMergeAndUpdateRS(sn, p, hri_a, hri_b);
+      } catch (IOException e) {
+        LOG.error("Error while processing favored nodes after merge.", e);
+        return false;
+      }
+
       // User could disable the table before master knows the new region.
       if (tableStateManager.isTableState(p.getTable(),
           ZooKeeperProtos.Table.State.DISABLED, ZooKeeperProtos.Table.State.DISABLING)) {
@@ -4325,9 +4345,18 @@ public class AssignmentManager extends ZooKeeperListener {
 
       if (et == EventType.RS_ZK_REGION_SPLIT) {
         regionOffline(p, State.SPLIT);
-        regionOnline(hri_a, sn);
-        regionOnline(hri_b, sn);
-        splitRegions.remove(p);
+
+        try {
+          processFNForDaughtersAndUpdateRS(sn, hri_a, hri_b, p);
+
+          regionOnline(hri_a, sn);
+          regionOnline(hri_b, sn);
+          splitRegions.remove(p);
+
+        } catch (IOException ioe) {
+          LOG.info("Failed to record split region " + p.getShortNameToLog(), ioe);
+          return false;
+        }
       }
     }
 

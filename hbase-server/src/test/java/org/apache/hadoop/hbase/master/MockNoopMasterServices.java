@@ -22,6 +22,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.*;
 import org.apache.hadoop.hbase.client.ClusterConnection;
 import org.apache.hadoop.hbase.executor.ExecutorService;
+import org.apache.hadoop.hbase.favored.FavoredNodesManager;
 import org.apache.hadoop.hbase.master.procedure.MasterProcedureEnv;
 import org.apache.hadoop.hbase.master.snapshot.SnapshotManager;
 import org.apache.hadoop.hbase.procedure.MasterProcedureManagerHost;
@@ -246,6 +247,11 @@ public class MockNoopMasterServices implements MasterServices, Server {
 
   @Override
   public void checkIfShouldMoveSystemRegionAsync() {
+  }
+
+  @Override
+  public FavoredNodesManager getFavoredNodesManager() {
+    return null;
   }
 
   @Override

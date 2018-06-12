@@ -51,6 +51,7 @@ import org.apache.hadoop.hbase.NotAllMetaRegionsOnlineException;
 import org.apache.hadoop.hbase.ProcedureInfo;
 import org.apache.hadoop.hbase.Server;
 import org.apache.hadoop.hbase.ServerName;
+import org.apache.hadoop.hbase.favored.FavoredNodesManager;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.apache.hadoop.hbase.TableDescriptors;
 import org.apache.hadoop.hbase.TableName;
@@ -492,6 +493,11 @@ public class TestCatalogJanitor {
       return -1;
     }
     public LoadBalancer getLoadBalancer() {
+      return null;
+    }
+
+    @Override
+    public FavoredNodesManager getFavoredNodesManager() {
       return null;
     }
 

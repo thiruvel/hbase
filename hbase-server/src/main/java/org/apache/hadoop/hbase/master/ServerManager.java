@@ -66,6 +66,7 @@ import org.apache.hadoop.hbase.procedure2.ProcedureExecutor;
 import org.apache.hadoop.hbase.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.protobuf.RequestConverter;
 import org.apache.hadoop.hbase.protobuf.ResponseConverter;
+import org.apache.hadoop.hbase.protobuf.generated.AdminProtos;
 import org.apache.hadoop.hbase.protobuf.generated.AdminProtos.AdminService;
 import org.apache.hadoop.hbase.protobuf.generated.AdminProtos.OpenRegionRequest;
 import org.apache.hadoop.hbase.protobuf.generated.AdminProtos.OpenRegionResponse;
@@ -78,9 +79,10 @@ import org.apache.hadoop.hbase.regionserver.HRegionServer;
 import org.apache.hadoop.hbase.regionserver.RegionOpeningState;
 import org.apache.hadoop.hbase.security.User;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.util.Pair;
+import org.apache.hadoop.hbase.util.Triple;
 import org.apache.hadoop.hbase.util.RetryCounter;
 import org.apache.hadoop.hbase.util.RetryCounterFactory;
-import org.apache.hadoop.hbase.util.Triple;
 import org.apache.hadoop.hbase.zookeeper.ZKUtil;
 import org.apache.hadoop.hbase.zookeeper.ZooKeeperWatcher;
 import org.apache.zookeeper.KeeperException;
@@ -1325,6 +1327,27 @@ public class ServerManager {
   public void removeRegions(final List<HRegionInfo> regions) {
     for (HRegionInfo hri: regions) {
       removeRegion(hri);
+    }
+  }
+
+  public void sendFavoredNodes(final ServerName server,
+      Map<HRegionInfo, List<ServerName>> favoredNodes) throws IOException {
+    AdminService.BlockingInterface admin = getRsAdmin(server);
+    if (admin == null) {
+      LOG.warn("Attempting to send favored nodes update rpc to server " + server.toString()
+          + " failed because no RPC connection found to this server");
+    } else {
+      List<Pair<HRegionInfo, List<ServerName>>> regionUpdateInfos = new ArrayList<>();
+      for (Entry<HRegionInfo, List<ServerName>> entry : favoredNodes.entrySet()) {
+        regionUpdateInfos.add(new Pair<>(entry.getKey(), entry.getValue()));
+      }
+      AdminProtos.UpdateFavoredNodesRequest request =
+        RequestConverter.buildUpdateFavoredNodesRequest(regionUpdateInfos);
+      try {
+        admin.updateFavoredNodes(null, request);
+      } catch (ServiceException se) {
+        throw ProtobufUtil.getRemoteException(se);
+      }
     }
   }
 }
